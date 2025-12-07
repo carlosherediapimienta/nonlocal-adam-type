@@ -1,8 +1,8 @@
 from __future__ import annotations
-from typing import Callable, Tuple, Any
+from typing import Callable, Tuple, Any, Union
 import numpy as np
+from .euler_method import EulerMethod
 
-# Use 64-bit floats by default
 DTYPE = np.float64
 
 class AlgorithmIDE:
@@ -53,74 +53,64 @@ class AlgorithmIDE:
                  rhs: Callable,
                  build_stats: Callable,
                  t_span: Tuple[float, float],
-                 y0,
+                 y0: Union[float, np.ndarray],
                  alpha: float,
                  lambda_: float = 0.,
                  verbose: bool = False,
                  quad_order: int = 1000):
 
         self.dL = dL
-        self.rhs = rhs
+        self.rhs_initial = rhs  
+        self.rhs = self._create_system_rhs()
         self.build_stats = build_stats
-        # Scalar initial condition (force dtype/shape)
-        self.y0 = np.asarray(y0, dtype=DTYPE).ravel()[0]
+
+        y0_arr = np.asarray(y0, dtype=DTYPE)
+        if y0_arr.ndim == 0 or len(y0_arr) == 1:
+            self.equation_order = 1
+            self.y0 = y0_arr.ravel()[0]
+            self.is_scalar = True
+        elif len(y0_arr) == 2:
+            self.equation_order = 2
+            self.y0 = y0_arr  
+            self.is_scalar = False
+        else:
+            raise ValueError(f"Invalid initial condition length: {len(y0_arr)}. Must be 1 or 2.")
+
+        self.euler_method = EulerMethod(order=self.equation_order)
+
         self.alpha = DTYPE(alpha)
-        self.lambda_ = DTYPE(lambda_)
         self.verbose = verbose
 
         self.t0, self.tf = t_span
-        # Time grid is [t0, tf) with uniform spacing alpha (tf not included)
         self.t = np.arange(self.t0, self.tf, self.alpha, dtype=DTYPE)
 
-        # ---------- relaxation (under-relaxed fixed-point iteration) ----
-        self.smoothing = DTYPE(0.5)    # starting smoothing factor
-        self.smooth_max = DTYPE(0.9999) # hard cap to avoid overshoot
-        # Monotone schedule of candidate smoothing increases
+        self.smoothing = DTYPE(0.5)
+        self.smooth_max = DTYPE(0.9999)
         self.increments = np.linspace(self.smoothing,
                                       self.smooth_max,
                                       1_000, dtype=DTYPE)
-        self._max_inc_hit = False         # flag once the max is reached
+        self._max_inc_hit = False
 
-        # ---------- stopping criteria / safeguards ----------------------
         self.global_tol = 1e-4
         self.max_iteration = int(3e3)
-    
-    # ---------------------------------------------------------------
-    @staticmethod
-    def _integrate(alpha: DTYPE,
-                   y0: DTYPE,
-                   t_vec: np.ndarray,
-                   rhs: Callable[[DTYPE, DTYPE, int, Tuple[Any, ...]],DTYPE],
-                   stats: Tuple[Any, ...]) -> np.ndarray:
-        """
-        Explicit Euler integrator over `t_vec`.
 
-        Parameters
-        ----------
-        alpha : DTYPE
-            Time step size.
-        y0 : DTYPE
-            Initial value at t_vec[0].
-        t_vec : np.ndarray
-            Monotone time grid.
-        rhs : Callable
-            Function (t, y_prev, idx, *stats) -> dy/dt.
-        stats : tuple
-            Precomputed data built from the current iterate y(t).
-        Returns
-        -------
-        y_hist : np.ndarray
-            Values of y at all points in t_vec (same length as t_vec).
+    def _create_system_rhs(self):
+        if self.equation_order == 1:
+            return self.rhs_initial
+        elif self.equation_order == 2:
+            def system_rhs(t, z, idx, *stats):
+                y, dy = z[0], z[1]
+                ddy = self.rhs_initial(t, y, idx, *stats)
+                return np.array([dy, ddy], dtype=DTYPE)
+            return system_rhs
+
+    # ---------------------------------------------------------------
+    def _integrate(self, alpha: float, y0, t_vec: np.ndarray, 
+                   rhs: Callable, stats: Tuple[Any, ...]) -> np.ndarray:
         """
-        y_hist = np.zeros(len(t_vec), dtype=DTYPE)
-        y_hist[0] = y0
-        
-        for i in range(len(t_vec) - 1):
-            t = t_vec[i]
-            y_prev = y_hist[i]
-            y_hist[i + 1] = y_prev + alpha * rhs(t, y_prev, i, *stats)
-        
-        return y_hist
+        Integra usando el método Euler configurado. 
+        """
+        return self.euler_method.solve(alpha, y0, t_vec, rhs, stats)
 
     # ------------- error & smoothing -----------------------------------
     @staticmethod
@@ -142,7 +132,7 @@ class AlgorithmIDE:
         return y_next, err
 
     # -------------------------------------------------------------------
-    def solve(self):
+    def solve(self, order: int = 1):
         """
         Fixed-point outer loop with under-relaxation.
 

@@ -8,7 +8,7 @@ class NonlocalSolverMomentumAdam:
     """
     Continuous-time Adam-like nonlocal dynamics for a scalar parameter θ(t):
 
-        dot theta(t) = f(t, theta(t)) - alpha(t) hatm(t) / ( sqrt{hatv(t) + eps(t)} )
+        dot theta(t) = - alpha(t) hatm(t) / ( sqrt{hatv(t) + eps(t)} )
 
     with hatm, hatv defined by exponential kernels K_1, K_2
            K_a(t) = (1 - beta_a)/alpha exp(-(1 - β_a) t / alpha),   a in {1,2}.
@@ -20,20 +20,16 @@ class NonlocalSolverMomentumAdam:
     - alpha(t) and eps(t) are bias-correction factors (analogs to discrete Adam).
     """
     def __init__(self, 
-                 f: Callable,
                  dL: Callable,
                  t_span: Tuple[float, float],
                  y0: float,
                  alpha: float,
-                 lambda_: float = 0.,
                  betas: Tuple[float, float] = (0.9, 0.999),
                  eps_base: float = 1e-8,
                  verbose: bool = False,
                  quad_order: int = 1000):
         
-        self.f = f
         self.dL = dL
-        self.lambda_ = DTYPE(lambda_)
         self.beta1, self.beta2 = map(DTYPE, betas)
         self.eps_base = DTYPE(eps_base)
         self.verbose = verbose
@@ -77,7 +73,6 @@ class NonlocalSolverMomentumAdam:
             t_span=t_span,
             y0=y0,
             alpha=alpha,
-            lambda_=lambda_,
             verbose=verbose,
             quad_order=quad_order
         )
@@ -104,8 +99,8 @@ class NonlocalSolverMomentumAdam:
         interp = self._interp(y)
 
         def g_fun(tau):
-            # g(tau) = dL(y(tau)) + 1/2 lambda y(tau)
-            return self.dL(interp(tau)) + 0.5 * self.lambda_ * interp(tau)
+            # g(tau) = dL(y(tau))
+            return self.dL(interp(tau)) 
         
         def _moments_single(t, lam):
             """
@@ -186,9 +181,9 @@ class NonlocalSolverMomentumAdam:
         denom = v_sqrt[idx] + eps_t[idx]
 
         # Combine local dynamics with normalized moment term
-        return self.f(t, y_val) - a_t[idx] * (m[idx] / denom)
+        return - a_t[idx] * (m[idx] / denom)
     
-    def solve(self):
+    def solve_first_order(self):
         """
         Solve the nonlocal Adam ODE using the IDE solver.
         
@@ -199,4 +194,17 @@ class NonlocalSolverMomentumAdam:
         y : np.ndarray
             Solution values at each time point.
         """
-        return self.solver.solve()
+        return self.solver.solve(order = 1)
+
+    def solve_second_order(self):
+        """
+        Solve the nonlocal Adam ODE using the IDE solver.
+        
+        Returns
+        -------
+        t : np.ndarray
+            Time grid.
+        y : np.ndarray
+            Solution values at each time point.
+        """
+        return self.solver.solve(order = 2)
