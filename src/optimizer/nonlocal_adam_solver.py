@@ -3,6 +3,7 @@ from typing import Callable, Tuple
 from scipy.interpolate import interp1d as scipy_interp1d
 from .tools.algorithm import AlgorithmIDE, DTYPE
 from .tools.integration import IntegrationQuadrature
+from .tools.kernels_definition import K_beta_first_order, K_beta_second_order
 
 class NonlocalSolverMomentumAdam:
     """
@@ -34,14 +35,36 @@ class NonlocalSolverMomentumAdam:
         self.eps_base = DTYPE(eps_base)
         self.verbose = verbose
         
-        # Setup time grid
+        y0_arr = np.asarray(y0, dtype=DTYPE)
+        if y0_arr.ndim == 0 or len(y0_arr) == 1:
+            # First order equation
+            self.equation_order = 1
+            self.y0 = y0_arr.ravel()[0]
+        elif len(y0_arr) == 2:
+            # Second order equation
+            self.equation_order = 2
+            self.y0 = y0_arr
+        else:
+            raise ValueError(f"y0 debe ser escalar o vector de 2 elementos, got shape {y0_arr.shape}")
+        
         self.t0, self.tf = t_span
-        self.y0 = np.asarray(y0, dtype=DTYPE).ravel()[0]
         self.alpha = DTYPE(alpha)
         self.t = np.arange(self.t0, self.tf, self.alpha, dtype=DTYPE)
         
         # Setup integrator for quadrature computations
         self.integrator = IntegrationQuadrature(n=quad_order, tol=1e-12, verbose=verbose)
+
+        if self.equation_order == 1:
+            self.K1 = lambda s: K_beta_first_order(s, self.beta1, self.alpha)
+            self.K2 = lambda s: K_beta_first_order(s, self.beta2, self.alpha)
+            if verbose:
+                print(f"First order equation --> using exponential kernels")
+        else:
+            self.K1 = lambda s: K_beta_second_order(s, self.beta1, self.alpha)
+            self.K2 = lambda s: K_beta_second_order(s, self.beta2, self.alpha)
+            if verbose:
+                print(f"Second order equation --> using sinh/sin kernels")
+        
         
         # Bias-correction factors (continuous-time analogs)
         self._alpha_t = lambda t: np.where(
@@ -110,21 +133,21 @@ class NonlocalSolverMomentumAdam:
             if t < 1e-12:
                 return DTYPE(0.), DTYPE(0.)
             
-            ker = lambda tau: np.exp(-lam * (t - tau))
-            f_m = lambda tau: lam * ker(tau) * g_fun(tau)
-            f_v = lambda tau: lam * ker(tau) * g_fun(tau)**2
+            f_m = lambda tau: self.K1(t - tau) * g_fun(tau)
+            f_v = lambda tau: self.K2(t - tau) * g_fun(tau)**2
             
             # Use the integrator instance
             m_k = self.integrator.integrate(f_m, 1e-12, t)
             v_k = self.integrator.integrate(f_v, 1e-12, t)
             
             if self.verbose:
-                print(f"step values → t={t}  m={m_k}  v={v_k}")
+                print(f"step values --> t={t}  m={m_k}  v={v_k}")
             return m_k, v_k
 
         # Vectorized evaluation over the solver grid
-        m = np.array([_moments_single(t, self.lam1)[0] for t in self.t])
-        v = np.array([_moments_single(t, self.lam2)[1] for t in self.t])
+        moments = np.array([_moments_single(t) for t in self.t])
+        m = moments[:, 0]
+        v = moments[:, 1]
 
         if self.verbose:
             print(f"m[0]={m[0]:.3e}, v[0]={v[0]:.3e}")
@@ -183,7 +206,7 @@ class NonlocalSolverMomentumAdam:
         # Combine local dynamics with normalized moment term
         return - a_t[idx] * (m[idx] / denom)
     
-    def solve_first_order(self):
+    def solve(self):
         """
         Solve the nonlocal Adam ODE using the IDE solver.
         
@@ -194,17 +217,4 @@ class NonlocalSolverMomentumAdam:
         y : np.ndarray
             Solution values at each time point.
         """
-        return self.solver.solve(order = 1)
-
-    def solve_second_order(self):
-        """
-        Solve the nonlocal Adam ODE using the IDE solver.
-        
-        Returns
-        -------
-        t : np.ndarray
-            Time grid.
-        y : np.ndarray
-            Solution values at each time point.
-        """
-        return self.solver.solve(order = 2)
+        return self.solver.solve()
