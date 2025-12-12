@@ -61,7 +61,6 @@ class AlgorithmIDE:
 
         self.dL = dL
         self.rhs_initial = rhs  
-        self.rhs = self._create_system_rhs()
         self.build_stats = build_stats
 
         y0_arr = np.asarray(y0, dtype=DTYPE)
@@ -76,6 +75,7 @@ class AlgorithmIDE:
         else:
             raise ValueError(f"Invalid initial condition length: {len(y0_arr)}. Must be 1 or 2.")
 
+        self.rhs = self._create_system_rhs()
         self.euler_method = EulerMethod(order=self.equation_order)
 
         self.alpha = DTYPE(alpha)
@@ -148,9 +148,21 @@ class AlgorithmIDE:
            when the error rises (simple backoff strategy).
         """
         self.iteration = 0
+        n = len(self.t)
+        if self.equation_order == 1:
+            y_baseline = np.full(n, self.y0, dtype=DTYPE)
+        else:
+            y_baseline = np.tile(self.y0, (n, 1))
 
         # Baseline solution without the non-local term
-        y_cur = self._integrate(self.alpha, self.y0, self.t, self.rhs)
+        initial_stats = (
+            y_baseline,                      # y_fix: array of size n
+            np.zeros(n, dtype=DTYPE),        # m = 0: without first moment
+            np.zeros(n, dtype=DTYPE),        # v_sqrt = 0: without second moment
+            np.zeros(n, dtype=DTYPE),        # a_t = 0: makes rhs = 0
+            np.ones(n, dtype=DTYPE) * 1e-8   # eps_t > 0: to avoid division by zero
+        )
+        y_cur = self._integrate(self.alpha, self.y0, self.t, self.rhs, stats=initial_stats)
         y_new, err = self._step(y_cur)
         if self.verbose:
             print(f"Iter {self.iteration} – err {err}")

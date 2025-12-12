@@ -127,7 +127,7 @@ class NonlocalSolverMomentumAdam:
             # g(tau) = dL(y(tau))
             return self.dL(interp(tau)) 
         
-        def _moments_single(t, lam):
+        def _moments_single(t):
             """
             Compute (m(t), v(t)) for a single time t via GL quadrature.
             For very small t, short-circuit to (0, 0) to avoid boundary issues.
