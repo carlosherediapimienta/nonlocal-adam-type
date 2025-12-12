@@ -4,6 +4,7 @@ from scipy.interpolate import interp1d as scipy_interp1d
 from .tools.algorithm import AlgorithmIDE, DTYPE
 from .tools.integration import IntegrationQuadrature
 from .tools.kernels_definition import K_beta_first_order, K_beta_second_order
+from .tools.condition_v_positive import ConditionVPositive
 
 class NonlocalSolverMomentumAdam:
     """
@@ -34,6 +35,7 @@ class NonlocalSolverMomentumAdam:
         self.beta1, self.beta2 = map(DTYPE, betas)
         self.eps_base = DTYPE(eps_base)
         self.verbose = verbose
+        self.condition_v_positive = ConditionVPositive(alpha)
         
         y0_arr = np.asarray(y0, dtype=DTYPE)
         if y0_arr.ndim == 0 or len(y0_arr) == 1:
@@ -149,6 +151,12 @@ class NonlocalSolverMomentumAdam:
         m = moments[:, 0]
         v = moments[:, 1]
 
+        r = np.array([g_fun(tk)**2 for tk in self.t], dtype=DTYPE)
+        viol = self.condition_v_positive(beta2=self.beta2, r=r, t=self.t, v=v)
+        if viol.any():
+            print(f"Violation of condition v positive detected at time {self.t[viol]}")
+
+
         if self.verbose:
             print(f"m[0]={m[0]:.3e}, v[0]={v[0]:.3e}")
             print(f"m[1]={m[1]:.3e}, v[1]={v[1]:.3e}")
@@ -158,7 +166,7 @@ class NonlocalSolverMomentumAdam:
         self._last_m = np.stack((self.t, m), axis=1)
         self._last_v = np.stack((self.t, v), axis=1)
 
-        v_sqrt = np.sqrt(v)
+        v_sqrt = np.sqrt(np.maximum(v, 0.))
         a_t = np.array([self._alpha_t(t) for t in self.t])
         eps_t = np.array([self._eps_t(t) for t in self.t])
 
