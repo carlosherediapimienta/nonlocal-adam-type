@@ -51,7 +51,6 @@ class NonlocalSolverMomentumAdam:
         
         self.t0, self.tf = t_span
         self.alpha = DTYPE(alpha)
-        self.t = np.arange(self.t0, self.tf, self.alpha, dtype=DTYPE)
         
         # Setup integrator for quadrature computations
         self.integrator = IntegrationQuadrature(n=quad_order, tol=1e-12, verbose=verbose)
@@ -83,12 +82,6 @@ class NonlocalSolverMomentumAdam:
         # Lambda parameters for kernels
         self.lam1 = (1. - self.beta1) / self.alpha
         self.lam2 = (1. - self.beta2) / self.alpha
-
-        # Precompute weight matrices (for potential fast-matrix versions)
-        dt = self.t[:, None] - self.t[None, :]
-        self._tri = dt >= 0
-        self._exp1 = np.exp(-self.lam1 * dt)
-        self._exp2 = np.exp(-self.lam2 * dt)
         
         # Create the IDE solver with our specific RHS and stats builder
         self.solver = AlgorithmIDE(
@@ -101,6 +94,14 @@ class NonlocalSolverMomentumAdam:
             verbose=verbose,
             quad_order=quad_order
         )
+
+        self.t = self.solver.t
+
+        # Precompute weight matrices for the kernels
+        dt = self.t[:, None] - self.t[None, :]
+        self._tri = dt >= 0
+        self._exp1 = np.exp(-self.lam1 * dt)
+        self._exp2 = np.exp(-self.lam2 * dt)
         
     def _interp(self, y: np.ndarray):
         """Cubic interpolator over the current time grid."""
